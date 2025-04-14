@@ -64,3 +64,6 @@ yarn-error.log
 # Test coverage
 .coverage
 coverage/
+
+# Ne pas ignorer les fichiers de migration
+!*/migrations/*.py
