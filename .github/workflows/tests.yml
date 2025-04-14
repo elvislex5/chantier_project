@@ -59,47 +59,22 @@ jobs:
         SECRET_KEY: 'test_key_for_running_tests'
         DJANGO_SETTINGS_MODULE: 'lon.settings_ci'
       run: |
-        # Vérifier l'état de la base de données
-        echo "Vérification de la base de données..."
-        PGPASSWORD=postgres psql -h localhost -U postgres -c '\l' lon_test_db || echo "Base de données non disponible"
-        
-        # Vérifier si accounts_user existe déjà
-        echo "Vérification de la table accounts_user..."
-        PGPASSWORD=postgres psql -h localhost -U postgres -d lon_test_db -c "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'accounts_user');" || echo "Erreur lors de la vérification de accounts_user"
-        
-        # 1. Forcer le reset de la base de données
+        # Réinitialiser complètement la base de données
         echo "Réinitialisation de la base de données..."
         PGPASSWORD=postgres psql -h localhost -U postgres -c "DROP DATABASE IF EXISTS lon_test_db;"
         PGPASSWORD=postgres psql -h localhost -U postgres -c "CREATE DATABASE lon_test_db;"
-        
-        # 2. Generate initial migrations avec le module auth d'abord
-        echo "Génération des migrations initiales..."
-        python manage.py makemigrations auth
-        
-        # 3. Generate migrations pour accounts (qui contient le modèle User)
-        echo "Génération des migrations pour accounts..."
-        python manage.py makemigrations accounts
-        
-        # 4. Generate migrations pour les autres apps
-        echo "Génération des autres migrations..."
+
+        # Vérifier les applications installées et le modèle User
+        echo "Vérification de la configuration..."
+        python -c "import sys; import django; import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'lon.settings_ci'); django.setup(); from django.conf import settings; print('INSTALLED_APPS:', settings.INSTALLED_APPS); print('AUTH_USER_MODEL:', getattr(settings, 'AUTH_USER_MODEL', None));"
+
+        # Générer et appliquer les migrations de manière simple et directe
         python manage.py makemigrations
-        
-        # 5. Migrate auth et contenttypes d'abord (dépendances de User)
-        echo "Migration des apps de base..."
-        python manage.py migrate auth
-        python manage.py migrate contenttypes
-        
-        # 6. Migrate accounts avec --fake-initial pour éviter les conflits
-        echo "Migration de l'app accounts..."
-        python manage.py migrate accounts --fake-initial || python manage.py migrate accounts
-        
-        # 7. Migrate tout le reste
-        echo "Migration des autres apps..."
         python manage.py migrate
-        
-        # 8. Vérifier que accounts_user existe maintenant
-        echo "Vérification finale de accounts_user..."
-        PGPASSWORD=postgres psql -h localhost -U postgres -d lon_test_db -c "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'accounts_user');"
+
+        # Vérifier que les tables ont été créées
+        echo "Vérification des tables..."
+        PGPASSWORD=postgres psql -h localhost -U postgres -d lon_test_db -c "\dt"
     
     - name: Run backend unit tests
       env:
@@ -127,11 +102,18 @@ jobs:
         DATABASE_URL: postgres://postgres:postgres@localhost:5432/lon_test_db
         DJANGO_SETTINGS_MODULE: 'lon.settings_ci'
       run: |
-        python manage.py shell -c "from accounts.models import User; User.objects.create_superuser('admin', 'admin@example.com', 'admin')" || echo "Erreur lors de la création de l'utilisateur"
+        # Afficher d'abord la structure de la base de données
+        echo "Structure de la base de données avant création utilisateur:"
+        PGPASSWORD=postgres psql -h localhost -U postgres -d lon_test_db -c "\dt"
+        PGPASSWORD=postgres psql -h localhost -U postgres -d lon_test_db -c "\dt accounts*"
         
-        # Vérifier que l'utilisateur a bien été créé
-        echo "Vérification de l'utilisateur admin..."
-        python manage.py shell -c "from accounts.models import User; print(f'Utilisateur admin existe: {User.objects.filter(username=\"admin\").exists()}')"
+        # Vérifier si le modèle User est correctement chargé
+        echo "Vérification du modèle User dans Django:"
+        python -c "import django, os, sys; os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'lon.settings_ci'); django.setup(); from django.apps import apps; from django.conf import settings; print('AUTH_USER_MODEL:', settings.AUTH_USER_MODEL); User = apps.get_model(settings.AUTH_USER_MODEL); print('User model:', User); print('User model table:', User._meta.db_table);"
+  
+        # Créer l'utilisateur admin avec gestion d'erreur détaillée
+        echo "Création de l'utilisateur admin..."
+        python manage.py shell -c "from accounts.models import User; import sys, traceback; try: admin_exists = User.objects.filter(username='admin').exists(); print(f'Admin existe: {admin_exists}'); admin_user = User.objects.create_superuser('admin', 'admin@example.com', 'admin') if not admin_exists else None; print('Utilisateur admin créé avec succès' if not admin_exists else 'Admin existe déjà'); except Exception as e: print(f'Erreur: {str(e)}'); print(f'Type: {type(e).__name__}'); traceback.print_exc(); print('Modèles:'); from django.apps import apps; [print(f'- {m._meta.app_label}.{m._meta.model_name}: {m._meta.db_table}') for m in apps.get_models()]; sys.exit(1);"
         
         # Vérifier directement dans la base de données
         echo "Vérification directe dans la base de données..."
