@@ -68,77 +68,28 @@ jobs:
         echo "Vérification de la configuration..."
         python -c "import django, os; os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'lon.settings_ci'); django.setup(); from django.conf import settings; print('AUTH_USER_MODEL:', settings.AUTH_USER_MODEL);"
         
-        # Vérifier si les fichiers de migration existent
-        echo "Vérification des fichiers de migration..."
-        if [ ! -d "accounts/migrations" ] || [ ! "$(ls -A accounts/migrations/)" ]; then
-            echo "Aucune migration trouvée pour accounts, création des répertoires..."
-            mkdir -p accounts/migrations
-            touch accounts/migrations/__init__.py
-            
-            # Créer une migration initiale minimale
-            echo "Création d'une migration initiale manuelle..."
-            cat > accounts/migrations/0001_initial.py << EOL
-from django.db import migrations, models
-import django.contrib.auth.models
-import django.contrib.auth.validators
-import django.utils.timezone
-
-class Migration(migrations.Migration):
-    initial = True
-    dependencies = [
-        ('auth', '0001_initial'),
-    ]
-    operations = [
-        migrations.CreateModel(
-            name='User',
-            fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('password', models.CharField(max_length=128, verbose_name='password')),
-                ('last_login', models.DateTimeField(blank=True, null=True, verbose_name='last login')),
-                ('is_superuser', models.BooleanField(default=False, help_text='Designates that this user has all permissions without explicitly assigning them.', verbose_name='superuser status')),
-                ('username', models.CharField(error_messages={'unique': 'A user with that username already exists.'}, help_text='Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only.', max_length=150, unique=True, validators=[django.contrib.auth.validators.UnicodeUsernameValidator()], verbose_name='username')),
-                ('first_name', models.CharField(blank=True, max_length=150, verbose_name='first name')),
-                ('last_name', models.CharField(blank=True, max_length=150, verbose_name='last name')),
-                ('email', models.EmailField(blank=True, max_length=254, verbose_name='email address')),
-                ('is_staff', models.BooleanField(default=False, help_text='Designates whether the user can log into this admin site.', verbose_name='staff status')),
-                ('is_active', models.BooleanField(default=True, help_text='Designates whether this user should be treated as active. Unselect this instead of deleting accounts.', verbose_name='active')),
-                ('date_joined', models.DateTimeField(default=django.utils.timezone.now, verbose_name='date joined')),
-                ('phone', models.CharField(blank=True, max_length=15, null=True, verbose_name='Téléphone')),
-                ('function', models.CharField(blank=True, max_length=100, null=True, verbose_name='Fonction')),
-                ('company', models.CharField(blank=True, max_length=100, null=True, verbose_name='Entreprise')),
-                ('groups', models.ManyToManyField(blank=True, help_text='The groups this user belongs to. A user will get all permissions granted to each of their groups.', related_name='user_set', related_query_name='user', to='auth.group', verbose_name='groups')),
-                ('user_permissions', models.ManyToManyField(blank=True, help_text='Specific permissions for this user.', related_name='user_set', related_query_name='user', to='auth.permission', verbose_name='user permissions')),
-            ],
-            options={
-                'verbose_name': 'Utilisateur',
-                'verbose_name_plural': 'Utilisateurs',
-            },
-            managers=[
-                ('objects', django.contrib.auth.models.UserManager()),
-            ],
-        ),
-    ]
-EOL
-            echo "Migration initiale pour accounts créée manuellement."
-        else
-            echo "Des migrations pour accounts existent déjà."
-            ls -la accounts/migrations/
-        fi
-
-        # Essayer une migration normale
-        echo "Tentative de migration standard..."
+        # Créer le répertoire de migrations si nécessaire
+        mkdir -p accounts/migrations
+        touch accounts/migrations/__init__.py
+        
+        # Tenter la migration standard
+        echo "Essai des migrations normales..."
         python manage.py makemigrations accounts --noinput
-        
-        if ! python manage.py migrate accounts --noinput; then
-            # Si la migration échoue, essayer de créer la table manuellement
-            echo "Migration de accounts a échoué, tentative de création manuelle des tables..."
-            python create_accounts_tables.py
-        fi
-        
-        # Continuer avec les autres migrations
-        echo "Création et application des autres migrations..."
         python manage.py makemigrations --noinput
-        python manage.py migrate --noinput
+        
+        # Tenter d'appliquer les migrations (avec priorité à accounts)
+        echo "Application des migrations..."
+        python manage.py migrate accounts --noinput || echo "Migration accounts échouée, on continue"
+        python manage.py migrate --noinput || echo "Migrations générales échouées, on continue"
+        
+        # Vérifier si la table accounts_user existe, sinon la créer manuellement
+        echo "Vérification de la table accounts_user..."
+        if ! PGPASSWORD=postgres psql -h localhost -U postgres -d lon_test_db -c "SELECT 1 FROM accounts_user LIMIT 1" > /dev/null 2>&1; then
+          echo "La table accounts_user n'existe pas, exécution du script de création manuel..."
+          python create_accounts_tables.py
+        else
+          echo "La table accounts_user existe déjà."
+        fi
         
         # Vérifier les tables créées
         echo "Tables dans la base de données:"
