@@ -59,18 +59,47 @@ jobs:
         SECRET_KEY: 'test_key_for_running_tests'
         DJANGO_SETTINGS_MODULE: 'lon.settings_ci'
       run: |
-        # 1. Generate initial migrations for accounts explicitly
+        # Vérifier l'état de la base de données
+        echo "Vérification de la base de données..."
+        PGPASSWORD=postgres psql -h localhost -U postgres -c '\l' lon_test_db || echo "Base de données non disponible"
+        
+        # Vérifier si accounts_user existe déjà
+        echo "Vérification de la table accounts_user..."
+        PGPASSWORD=postgres psql -h localhost -U postgres -d lon_test_db -c "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'accounts_user');" || echo "Erreur lors de la vérification de accounts_user"
+        
+        # 1. Forcer le reset de la base de données
+        echo "Réinitialisation de la base de données..."
+        PGPASSWORD=postgres psql -h localhost -U postgres -c "DROP DATABASE IF EXISTS lon_test_db;"
+        PGPASSWORD=postgres psql -h localhost -U postgres -c "CREATE DATABASE lon_test_db;"
+        
+        # 2. Generate initial migrations avec le module auth d'abord
+        echo "Génération des migrations initiales..."
+        python manage.py makemigrations auth
+        
+        # 3. Generate migrations pour accounts (qui contient le modèle User)
+        echo "Génération des migrations pour accounts..."
         python manage.py makemigrations accounts
         
-        # 2. Generate other migrations
+        # 4. Generate migrations pour les autres apps
+        echo "Génération des autres migrations..."
         python manage.py makemigrations
         
-        # 3. Try to migrate accounts app first
-        echo "Attempting to migrate accounts app..."
-        python manage.py migrate accounts || echo "No migrations for accounts app"
+        # 5. Migrate auth et contenttypes d'abord (dépendances de User)
+        echo "Migration des apps de base..."
+        python manage.py migrate auth
+        python manage.py migrate contenttypes
         
-        # 4. Run other migrations
+        # 6. Migrate accounts avec --fake-initial pour éviter les conflits
+        echo "Migration de l'app accounts..."
+        python manage.py migrate accounts --fake-initial || python manage.py migrate accounts
+        
+        # 7. Migrate tout le reste
+        echo "Migration des autres apps..."
         python manage.py migrate
+        
+        # 8. Vérifier que accounts_user existe maintenant
+        echo "Vérification finale de accounts_user..."
+        PGPASSWORD=postgres psql -h localhost -U postgres -d lon_test_db -c "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'accounts_user');"
     
     - name: Run backend unit tests
       env:
@@ -98,7 +127,15 @@ jobs:
         DATABASE_URL: postgres://postgres:postgres@localhost:5432/lon_test_db
         DJANGO_SETTINGS_MODULE: 'lon.settings_ci'
       run: |
-        python manage.py shell -c "from accounts.models import User; User.objects.create_superuser('admin', 'admin@example.com', 'adminpassword')"
+        python manage.py shell -c "from accounts.models import User; User.objects.create_superuser('admin', 'admin@example.com', 'admin')" || echo "Erreur lors de la création de l'utilisateur"
+        
+        # Vérifier que l'utilisateur a bien été créé
+        echo "Vérification de l'utilisateur admin..."
+        python manage.py shell -c "from accounts.models import User; print(f'Utilisateur admin existe: {User.objects.filter(username=\"admin\").exists()}')"
+        
+        # Vérifier directement dans la base de données
+        echo "Vérification directe dans la base de données..."
+        PGPASSWORD=postgres psql -h localhost -U postgres -d lon_test_db -c "SELECT username FROM accounts_user WHERE username='admin';"
     
     - name: Start backend server for e2e tests
       env:

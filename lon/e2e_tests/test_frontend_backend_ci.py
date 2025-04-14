@@ -55,14 +55,38 @@ class FrontendBackendIntegrationTest(unittest.TestCase):
         
         # Créer un utilisateur admin si nécessaire (pour les tests CI)
         try:
-            logger.info("Tentative de création de l'utilisateur admin pour CI...")
+            logger.info("Tentative de vérification/création de l'utilisateur admin pour CI...")
             from django.contrib.auth import get_user_model
+            from django.db import connection
+            
+            # Vérifier que la connexion à la BD est active
+            logger.info("Vérification de la connexion à la base de données...")
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1")
+                result = cursor.fetchone()
+                logger.info(f"Connexion BD active: {result == (1,)}")
+            
+            # Vérifier que la table accounts_user existe
+            logger.info("Vérification de la table accounts_user...")
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'accounts_user')")
+                exists = cursor.fetchone()[0]
+                logger.info(f"Table accounts_user existe: {exists}")
+            
             User = get_user_model()
-            if not User.objects.filter(username="admin").exists():
+            admin_exists = User.objects.filter(username="admin").exists()
+            logger.info(f"Utilisateur admin existe déjà: {admin_exists}")
+            
+            if not admin_exists:
+                logger.info("Création de l'utilisateur admin...")
                 User.objects.create_superuser("admin", "admin@example.com", "admin")
                 logger.info("Utilisateur admin créé avec succès pour CI")
         except Exception as e:
-            logger.error(f"Erreur lors de la création de l'admin: {str(e)}")
+            logger.error(f"Erreur lors de la vérification/création de l'admin: {str(e)}")
+            # Afficher plus d'informations de débogage
+            logger.error(f"Type d'erreur: {type(e).__name__}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
         
         credentials = {
             "username": "admin",
