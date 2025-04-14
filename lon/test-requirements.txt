@@ -1,0 +1,13 @@
+# Dépendances de base
+-r requirements.txt
+
+# Dépendances spécifiques aux tests
+coverage==7.4.0
+pytest==7.4.3
+pytest-django==4.7.0
+pytest-cov==4.1.0
+freezegun==1.2.2  # Pour manipuler le temps dans les tests
+factory-boy==3.3.0  # Pour la génération de données de test 
+selenium==4.15.2  # Pour les tests end-to-end
+webdriver-manager==4.0.1  # Pour gérer les pilotes du navigateur automatiquement
+requests==2.31.0  # Pour les tests d'API directs 

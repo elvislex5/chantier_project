@@ -1,0 +1,189 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: lon_test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        cd lon
+        pip install -r test-requirements.txt
+    
+    - name: Setup Chrome
+      uses: browser-actions/setup-chrome@v1
+      with:
+        chrome-version: 'stable'
+        
+    - name: Verify Chrome and ChromeDriver
+      run: |
+        google-chrome --version
+        cd lon
+        python -c "from webdriver_manager.chrome import ChromeDriverManager; from selenium import webdriver; print('ChromeDriver path:', ChromeDriverManager().install())"
+    
+    - name: Run migrations
+      env:
+        DATABASE_URL: postgres://postgres:postgres@localhost:5432/lon_test_db
+        DEBUG: '1'
+        SECRET_KEY: 'test_key_for_running_tests'
+        DJANGO_SETTINGS_MODULE: 'lon.settings_ci'
+      run: |
+        cd lon
+        
+        # 1. Vérifier la connexion à la base de données
+        echo "Verifying database connection..."
+        python -c "import psycopg2; conn = psycopg2.connect('dbname=lon_test_db user=postgres password=postgres host=localhost port=5432'); print('Database connection successful'); conn.close()"
+        
+        # 2. Vérifier la configuration de Django
+        echo "Examining project structure..."
+        python -c "import django; django.setup(); from django.apps import apps; print('Installed apps:'); [print(f'- {app.label}') for app in apps.get_app_configs()]"
+        
+        # 3. Créer toutes les migrations nécessaires
+        echo "Creating migrations..."
+        python manage.py makemigrations
+        
+        # 4. Vérifier l'état des migrations
+        echo "Checking migrations status..."
+        python manage.py showmigrations
+        
+        # 5. Appliquer les migrations dans l'ordre exact recommandé par Copilot
+        echo "Applying migrations in the recommended order..."
+        python manage.py migrate auth
+        python manage.py migrate contenttypes
+        python manage.py migrate accounts
+        python manage.py migrate admin
+        python manage.py migrate sessions
+        python manage.py migrate clients
+        python manage.py migrate projects
+        python manage.py migrate tasks
+        python manage.py migrate api
+        
+        # 6. S'assurer que toutes les migrations restantes sont appliquées
+        echo "Applying remaining migrations..."
+        python manage.py migrate
+        python manage.py migrate --run-syncdb
+        
+        # 7. Afficher les tables créées
+        echo "Debugging database schema..."
+        python -c "from django.db import connection; cursor = connection.cursor(); cursor.execute('SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname=\'public\';'); print('Tables in database:'); [print(row[0]) for row in cursor.fetchall()]"
+    
+    - name: Run backend unit tests
+      env:
+        DATABASE_URL: postgres://postgres:postgres@localhost:5432/lon_test_db
+        DEBUG: '1'
+        SECRET_KEY: 'test_key_for_running_tests'
+        DJANGO_SETTINGS_MODULE: 'lon.settings_ci'
+      run: |
+        cd lon
+        pytest projects/tests.py tasks/tests.py -v
+    
+    - name: Run database tests separately
+      env:
+        DATABASE_URL: postgres://postgres:postgres@localhost:5432/lon_test_db
+        DEBUG: '1'
+        SECRET_KEY: 'test_key_for_running_tests'
+        DJANGO_SETTINGS_MODULE: 'lon.settings_ci'
+      run: |
+        cd lon
+        pytest api/tests.py::DatabaseConnectionTest -v
+    
+    - name: Setup admin user
+      env:
+        DATABASE_URL: postgres://postgres:postgres@localhost:5432/lon_test_db
+        DEBUG: '1'
+        SECRET_KEY: 'test_key_for_running_tests'
+        DJANGO_SETTINGS_MODULE: 'lon.settings_ci'
+      run: |
+        cd lon
+        echo "from django.contrib.auth import get_user_model; User = get_user_model(); User.objects.create_superuser('admin', 'admin@example.com', 'admin') if not User.objects.filter(username='admin').exists() else None" | python manage.py shell
+    
+    - name: Start backend server for e2e tests
+      env:
+        DATABASE_URL: postgres://postgres:postgres@localhost:5432/lon_test_db
+        DEBUG: '1'
+        SECRET_KEY: 'test_key_for_running_tests'
+        DJANGO_SETTINGS_MODULE: 'lon.settings_ci'
+        ALLOWED_HOSTS: 'localhost,127.0.0.1'
+      run: |
+        cd lon
+        python manage.py runserver &
+        # Attendre que le serveur soit prêt
+        sleep 5
+      
+    - name: Build and start frontend
+      run: |
+        cd lon_front
+        npm install
+        npm run build
+        
+    - name: Install Nginx
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y nginx
+        
+    - name: Configure Nginx for frontend
+      run: |
+        sudo bash -c 'cat > /etc/nginx/sites-available/default << EOF
+        server {
+            listen 80;
+            server_name localhost;
+            
+            root $(pwd)/lon_front/dist;
+            index index.html;
+            
+            location / {
+                try_files \$uri \$uri/ /index.html;
+            }
+        }
+        EOF'
+        sudo systemctl restart nginx
+        
+    - name: Run API tests
+      env:
+        DATABASE_URL: postgres://postgres:postgres@localhost:5432/lon_test_db
+        DEBUG: '1'
+        SECRET_KEY: 'test_key_for_running_tests'
+        DJANGO_SETTINGS_MODULE: 'lon.settings_ci'
+        API_URL: 'http://localhost:8000/api'
+        FRONTEND_URL: 'http://localhost:80'
+        WDM_LOG_LEVEL: '0'
+      run: |
+        cd lon
+        python -m pytest api/tests.py -v
+        python -m pytest e2e_tests/test_frontend_backend_ci.py -v
+    
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: pytest-results
+        path: lon/pytest-report.xml 

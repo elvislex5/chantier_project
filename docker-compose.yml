@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  # Service de base de données
+  db:
+    image: postgres:16-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=lon_db
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Service backend Django
+  backend:
+    build: ./lon
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - DEBUG=0
+      - DATABASE_URL=postgres://postgres:postgres@db:5432/lon_db
+      - SECRET_KEY=change_this_to_a_secure_random_string_in_production
+      - ALLOWED_HOSTS=localhost,127.0.0.1
+      - CORS_ALLOWED_ORIGINS=http://localhost,http://localhost:8080,http://frontend:80
+    volumes:
+      - ./lon:/app
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
+    ports:
+      - "8000:8000"
+    networks:
+      - app_network
+    command: >
+      bash -c "python manage.py migrate &&
+               python manage.py collectstatic --noinput &&
+               gunicorn lon.wsgi:application --bind 0.0.0.0:8000"
+
+  # Service frontend React/Vite
+  frontend:
+    build: ./lon_front
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    networks:
+      - app_network
+
+  # Service de tests
+  tests:
+    build:
+      context: ./lon
+      dockerfile: Dockerfile.tests
+    volumes:
+      - ./lon:/app
+    networks:
+      - app_network
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - DEBUG=1
+      - DATABASE_URL=postgres://postgres:postgres@db:5432/lon_test_db
+      - SECRET_KEY=test_key_for_running_tests
+      - DJANGO_SETTINGS_MODULE=lon.settings_tests
+      - PYTHONUNBUFFERED=1
+    command: >
+      bash -c "pip install -r test-requirements.txt &&
+               chmod +x run_tests.sh &&
+               ./run_tests.sh"
+
+networks:
+  app_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  static_volume:
+  media_volume: 
