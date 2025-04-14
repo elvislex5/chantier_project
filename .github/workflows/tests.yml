@@ -47,54 +47,30 @@ jobs:
     - name: Verify Chrome and ChromeDriver
       run: |
         google-chrome --version
-        cd lon
-        python -c "from webdriver_manager.chrome import ChromeDriverManager; from selenium import webdriver; print('ChromeDriver path:', ChromeDriverManager().install())"
+        python -c "from webdriver_manager.chrome import ChromeDriverManager; ChromeDriverManager().install()"
+      env:
+        WDM_LOG_LEVEL: '0'
     
     - name: Run migrations
+      working-directory: lon
       env:
         DATABASE_URL: postgres://postgres:postgres@localhost:5432/lon_test_db
         DEBUG: '1'
         SECRET_KEY: 'test_key_for_running_tests'
         DJANGO_SETTINGS_MODULE: 'lon.settings_ci'
       run: |
-        cd lon
+        # 1. Generate initial migrations for accounts explicitly
+        python manage.py makemigrations accounts
         
-        # 1. Vérifier la connexion à la base de données
-        echo "Verifying database connection..."
-        python -c "import psycopg2; conn = psycopg2.connect('dbname=lon_test_db user=postgres password=postgres host=localhost port=5432'); print('Database connection successful'); conn.close()"
-        
-        # 2. Vérifier la configuration de Django
-        echo "Examining project structure..."
-        python -c "import django; django.setup(); from django.apps import apps; print('Installed apps:'); [print(f'- {app.label}') for app in apps.get_app_configs()]"
-        
-        # 3. Créer toutes les migrations nécessaires
-        echo "Creating migrations..."
+        # 2. Generate other migrations
         python manage.py makemigrations
         
-        # 4. Vérifier l'état des migrations
-        echo "Checking migrations status..."
-        python manage.py showmigrations
+        # 3. Try to migrate accounts app first
+        echo "Attempting to migrate accounts app..."
+        python manage.py migrate accounts || echo "No migrations for accounts app"
         
-        # 5. Appliquer les migrations dans l'ordre exact recommandé par Copilot
-        echo "Applying migrations in the recommended order..."
-        python manage.py migrate auth
-        python manage.py migrate contenttypes
-        python manage.py migrate accounts
-        python manage.py migrate admin
-        python manage.py migrate sessions
-        python manage.py migrate clients
-        python manage.py migrate projects
-        python manage.py migrate tasks
-        python manage.py migrate api
-        
-        # 6. S'assurer que toutes les migrations restantes sont appliquées
-        echo "Applying remaining migrations..."
+        # 4. Run other migrations
         python manage.py migrate
-        python manage.py migrate --run-syncdb
-        
-        # 7. Afficher les tables créées
-        echo "Debugging database schema..."
-        python -c "from django.db import connection; cursor = connection.cursor(); cursor.execute('SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname=\'public\';'); print('Tables in database:'); [print(row[0]) for row in cursor.fetchall()]"
     
     - name: Run backend unit tests
       env:
@@ -116,15 +92,13 @@ jobs:
         cd lon
         pytest api/tests.py::DatabaseConnectionTest -v
     
-    - name: Setup admin user
+    - name: Create admin user for tests
+      working-directory: lon
       env:
         DATABASE_URL: postgres://postgres:postgres@localhost:5432/lon_test_db
-        DEBUG: '1'
-        SECRET_KEY: 'test_key_for_running_tests'
         DJANGO_SETTINGS_MODULE: 'lon.settings_ci'
       run: |
-        cd lon
-        echo "from django.contrib.auth import get_user_model; User = get_user_model(); User.objects.create_superuser('admin', 'admin@example.com', 'admin') if not User.objects.filter(username='admin').exists() else None" | python manage.py shell
+        python manage.py shell -c "from accounts.models import User; User.objects.create_superuser('admin', 'admin@example.com', 'adminpassword')"
     
     - name: Start backend server for e2e tests
       env:
@@ -168,17 +142,29 @@ jobs:
         sudo systemctl restart nginx
         
     - name: Run API tests
+      working-directory: lon
       env:
         DATABASE_URL: postgres://postgres:postgres@localhost:5432/lon_test_db
-        DEBUG: '1'
-        SECRET_KEY: 'test_key_for_running_tests'
         DJANGO_SETTINGS_MODULE: 'lon.settings_ci'
-        API_URL: 'http://localhost:8000/api'
-        FRONTEND_URL: 'http://localhost:80'
-        WDM_LOG_LEVEL: '0'
       run: |
-        cd lon
         python -m pytest api/tests.py -v
+
+    - name: Run PostgreSQL connection tests
+      working-directory: lon
+      env:
+        DATABASE_URL: postgres://postgres:postgres@localhost:5432/lon_test_db
+        DJANGO_SETTINGS_MODULE: 'lon.settings_ci'
+      run: |
+        python -m pytest api/tests.py::DatabaseConnectionTest -v
+
+    - name: Run e2e tests
+      working-directory: lon
+      env:
+        DATABASE_URL: postgres://postgres:postgres@localhost:5432/lon_test_db
+        DJANGO_SETTINGS_MODULE: 'lon.settings_ci'
+        FRONTEND_URL: 'http://localhost:80'
+        API_URL: 'http://localhost:8000/api'
+      run: |
         python -m pytest e2e_tests/test_frontend_backend_ci.py -v
     
     - name: Upload test results
