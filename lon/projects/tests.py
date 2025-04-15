@@ -1,7 +1,7 @@
-from django.test import TestCase
+from django.test import SimpleTestCase
 
-class DummyTest(TestCase):
-    """Tests minimalistes ne dépendant d'aucun modèle"""
+class DummyTest(SimpleTestCase):
+    """Tests minimalistes ne dépendant d'aucun modèle et sans base de données"""
 
     def test_dummy(self):
         """Test vide qui passe toujours"""
