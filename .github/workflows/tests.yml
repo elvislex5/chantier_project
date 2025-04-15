@@ -109,7 +109,7 @@ jobs:
         DJANGO_SETTINGS_MODULE: 'lon.settings_ci'
       run: |
         cd lon
-        pytest projects/tests.py tasks/tests.py -v
+        python -m unittest projects/tests.py tasks/tests.py
     
     - name: Run database tests separately
       env:

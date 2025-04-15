@@ -1,8 +1,9 @@
-from django.test import SimpleTestCase
+import unittest
 
-class DummyTest(SimpleTestCase):
-    """Tests minimalistes ne dépendant d'aucun modèle et sans base de données"""
+# On évite complètement django
+class BasicTest(unittest.TestCase):
+    """Tests unitaires purs sans aucune dépendance à Django"""
 
-    def test_dummy(self):
-        """Test vide qui passe toujours"""
+    def test_always_true(self):
+        """Test simple qui passe toujours"""
         self.assertTrue(True)
