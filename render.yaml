@@ -48,7 +48,4 @@ services:
     plan: starter
     envVars:
       - key: VITE_API_URL
-        fromService:
-          type: web
-          name: lon-backend
-          property: url
+        value: https://${lon-backend.host}/api
