@@ -38,13 +38,15 @@ services:
         value: "False"
       - key: ALLOWED_HOSTS
         value: "*.render.com,localhost"
+      - key: DJANGO_SETTINGS_MODULE
+        value: "lon.settings_prod"
     
   # Service frontend
   - type: web
     name: lon-frontend
-    env: node
-    buildCommand: cd lon_front && npm install && npm run build
-    startCommand: cd lon_front && npx serve -s dist -l $PORT
+    env: docker
+    rootDir: lon_front
+    dockerfilePath: ./Dockerfile
     plan: starter
     envVars:
       - key: VITE_API_URL
